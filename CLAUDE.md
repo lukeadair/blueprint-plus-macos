@@ -33,6 +33,11 @@ Glass doesn't render in these captures (sidebar and glass HUDs come out white); 
   so exact float equality can need a 1e-9 tolerance (`moveEdgeSlidesTheWallSidewaysOnly`).
 - `JobStore.swift`: `~/Library/Containers/com.lukeadair.blueprintplus/Data/Library/Application Support/Blueprint+/jobs/<id>.json|pdf`,
   atomic writes. A job file + PDF copied over from the phone opens as is.
+  Sync (File > Sync Folder…): the store moves to a user-picked folder (security-scoped bookmark, `syncFolder` in
+  UserDefaults) that a sync tool shares with the phone (Google Drive + DriveSync); jobs are copied in (`adopt`, later
+  `updated` wins), never merged. `list()` hides a job until its PDF arrives and turns a sync tool's same-id copy into a
+  "(conflict)" job; `save(_:seen:)` refuses to overwrite a version another device saved or recreate a job it deleted (then `JobModel` saves its own
+  as a conflict job and shows the other). The app re-reads on activation (`AppState.refresh`). No folder watching.
 - `PDFPages.swift`: `PlanPDF` actor (PDFKit isn't thread-safe: the Android `pdfThread`). Renders at the same scale as
   Android (≤4096 px, ≤4x) so stored run pixels mean the same thing. Text boxes come from `page.selection(for:)` bounds
   through `page.transform(for: .cropBox)`, flipped to top-left points; works on rotated pages. OCR is Vision

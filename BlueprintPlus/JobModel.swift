@@ -22,6 +22,8 @@ final class JobModel {
     let store: JobStore
     private(set) var job: Job
     @ObservationIgnored var onSaved: (Job) -> Void = { _ in }
+    /** `updated` of the version on disk this model last loaded or saved; a different one there came from another device. */
+    @ObservationIgnored private var seen: Int64
 
     // Snapshots of the job before each user edit; in memory only, so they're gone once the job is closed.
     private(set) var undoStack: [Job] = []
@@ -87,6 +89,7 @@ final class JobModel {
     init(store: JobStore, job: Job) {
         self.store = store
         self.job = job
+        seen = job.updated
         open()
     }
 
@@ -130,9 +133,38 @@ final class JobModel {
         let pageChanged = reseeded.page != job.page
         reseeded.updated = Int64(Date().timeIntervalSince1970 * 1000)
         job = reseeded
-        do { try store.save(job) } catch { message = "Couldn't save: \(error.localizedDescription)" }
+        do {
+            try store.save(job, seen: seen)
+            seen = job.updated
+        } catch JobStore.StoreError.changedElsewhere {
+            // Never merge: keep this device's version as its own job and show the other device's.
+            do {
+                let copy = try store.saveAsConflict(job)
+                onSaved(copy)
+                message = "This job was changed on another device, so your edit was saved as “\(copy.name)”."
+                if let disk = store.load(job.id) { reloadIfChanged(disk) } // only now: the edit is safe in the copy
+            } catch { message = "Couldn't save: \(error.localizedDescription)" }
+        } catch JobStore.StoreError.deletedElsewhere {
+            // Not onSaved (it would put the job back in the list) or kick (seeding would save again); refresh closes it.
+            message = "This job was deleted on another device, so changes to it aren't saved."
+            if pageChanged { loadPage() }
+            return
+        } catch { message = "Couldn't save: \(error.localizedDescription)" }
         onSaved(job)
         if pageChanged { loadPage() }
+        kick()
+    }
+
+    /** Shows `disk` if another device saved it (its `updated` isn't the one seen), keeping this page. Undo is cleared: its snapshots are of the old version. */
+    func reloadIfChanged(_ disk: Job) {
+        guard disk.updated != seen else { return }
+        resetTool()
+        undoStack.removeAll(); redoStack.removeAll()
+        var d = disk
+        d.page = job.page
+        job = d
+        seen = disk.updated
+        onSaved(job)
         kick()
     }
 

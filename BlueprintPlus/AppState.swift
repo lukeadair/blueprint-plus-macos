@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AppKit
 import Observation
 
 enum JobSort: String, CaseIterable, Identifiable {
@@ -18,7 +19,9 @@ enum JobSort: String, CaseIterable, Identifiable {
 /** The job list and the one open job. */
 @MainActor @Observable
 final class AppState {
-    let store = JobStore()
+    private(set) var store: JobStore
+    /** The folder jobs sync through (nil = this Mac only); access to it is held while it's in use. */
+    private(set) var syncFolder: URL?
     private(set) var jobs: [Job] = []
     private(set) var model: JobModel?
     var importing = false
@@ -36,6 +39,19 @@ final class AppState {
     }
 
     init() {
+        var failed = false
+        var folder: URL?
+        if let data = UserDefaults.standard.data(forKey: Self.syncKey) {
+            var stale = false
+            if let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, bookmarkDataIsStale: &stale),
+               url.startAccessingSecurityScopedResource() {
+                if stale, let d = try? url.bookmarkData(options: .withSecurityScope) { UserDefaults.standard.set(d, forKey: Self.syncKey) }
+                folder = url
+            } else { failed = true }
+        }
+        syncFolder = folder
+        store = JobStore(dir: folder)
+        if failed { error = "Couldn't open the sync folder, so these are the jobs saved on this Mac. Choose it again in File > Sync Folder…" }
         jobs = store.list()
         let last = UserDefaults.standard.string(forKey: "openJob")
         selection = jobs.contains { $0.id == last } ? last : nil
@@ -52,7 +68,63 @@ final class AppState {
     }
 
     private func replace(_ j: Job) {
-        if let i = jobs.firstIndex(where: { $0.id == j.id }) { jobs[i] = j }
+        if let i = jobs.firstIndex(where: { $0.id == j.id }) { jobs[i] = j } else { jobs.insert(j, at: 0) } // new: a conflict copy
+    }
+
+    /** Picks up what another device synced: the list, and the open job if it changed (or closes it if it was deleted). */
+    func refresh() {
+        let store = store
+        Task {
+            // Off the main thread: in a cloud folder, reading an online-only file waits for its download.
+            let list = await Task.detached { store.list() }.value
+            guard store.dir == self.store.dir else { return } // switched folders meanwhile
+            jobs = list
+            guard let m = model else { return }
+            replace(m.job) // the list may predate an edit made while it was read
+            // Read now, not with the list: an older read would look like another device's version.
+            if let disk = store.load(m.job.id) { m.reloadIfChanged(disk) } else if !store.exists(m.job.id) { selection = nil }
+        }
+    }
+
+    private static let syncKey = "syncFolder"
+
+    /** Asks for a folder (one a sync tool shares, e.g. Google Drive), copies this Mac's jobs into it and uses it. */
+    func chooseSyncFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Sync Here"
+        panel.message = "Choose a folder that syncs with your other devices, e.g. one in Google Drive. Your jobs are copied into it."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard url.startAccessingSecurityScopedResource() else { error = "Couldn't open that folder."; return }
+        do {
+            let new = JobStore(dir: url)
+            try new.adopt(store)
+            UserDefaults.standard.set(try url.bookmarkData(options: .withSecurityScope), forKey: Self.syncKey)
+            use(new, folder: url)
+        } catch {
+            url.stopAccessingSecurityScopedResource()
+            self.error = "Couldn't use that folder: \(error.localizedDescription)"
+        }
+    }
+
+    /** Goes back to this Mac's own folder, copying in the jobs from the sync folder first. */
+    func stopSyncing() {
+        let local = JobStore()
+        do { try local.adopt(store) } catch { self.error = "Couldn't copy the jobs back: \(error.localizedDescription)"; return }
+        UserDefaults.standard.removeObject(forKey: Self.syncKey)
+        use(local, folder: nil)
+    }
+
+    private func use(_ new: JobStore, folder: URL?) {
+        model?.close()
+        model = nil
+        syncFolder?.stopAccessingSecurityScopedResource()
+        syncFolder = folder
+        store = new
+        jobs = store.list()
+        if jobs.contains(where: { $0.id == selection }) { open(selection) } else { selection = nil }
     }
 
     /** Copies the PDF in as a new job and opens it. */

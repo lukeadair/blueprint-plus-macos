@@ -8,6 +8,7 @@ struct BlueprintPlusApp: App {
         Window("Blueprint+", id: "main") {
             ContentView(app: app)
                 .frame(minWidth: 900, minHeight: 560)
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in app.refresh() }
                 #if DEBUG
                 .task { await debugSnapshot(app) }
                 #endif
@@ -29,6 +30,9 @@ private struct AppCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New Job…") { app.importing = true }.keyboardShortcut("n")
+            Divider()
+            Button(app.syncFolder.map { "Sync Folder: \($0.lastPathComponent)…" } ?? "Sync Folder…") { app.chooseSyncFolder() }
+            Button("Stop Syncing") { app.stopSyncing() }.disabled(app.syncFolder == nil)
         }
         CommandGroup(after: .saveItem) {
             Button("Export Quote…") { if let m { exportQuote(m) } }

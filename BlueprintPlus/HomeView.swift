@@ -38,7 +38,7 @@ struct ContentView: View {
         .fileImporter(isPresented: $app.importing, allowedContentTypes: [.pdf]) { result in
             if case .success(let url) = result { app.create(from: url) }
         }
-        .alert("Couldn't Create the Job", isPresented: Binding(get: { app.error != nil }, set: { if !$0 { app.error = nil } })) {
+        .alert("Blueprint+", isPresented: Binding(get: { app.error != nil }, set: { if !$0 { app.error = nil } })) {
             Button("OK") {}
         } message: { Text(app.error ?? "") }
     }
