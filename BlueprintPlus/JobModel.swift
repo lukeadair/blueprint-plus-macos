@@ -101,6 +101,8 @@ final class JobModel {
     var ppi: Double { bitmap?.ppi ?? 72 }
     var ratio: Double? { parseScale(job.scale) }
     var measuring: Bool { !chain.isEmpty || calibrating }
+    /** Mid-gesture: a reload now (`reloadIfChanged`) would drop the run being measured or the drag. */
+    var busy: Bool { measuring || nodeDraft != nil || draft != nil }
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
 
@@ -157,7 +159,7 @@ final class JobModel {
 
     /** Shows `disk` if another device saved it (its `updated` isn't the one seen), keeping this page. Undo is cleared: its snapshots are of the old version. */
     func reloadIfChanged(_ disk: Job) {
-        guard disk.updated != seen else { return }
+        guard isNewer(disk) else { return }
         resetTool()
         undoStack.removeAll(); redoStack.removeAll()
         var d = disk
@@ -167,6 +169,9 @@ final class JobModel {
         onSaved(job)
         kick()
     }
+
+    /** Another device saved `disk` since this one last loaded or saved the job. */
+    func isNewer(_ disk: Job) -> Bool { disk.updated != seen }
 
     func undo() { restore(from: \.undoStack, to: \.redoStack) }
     func redo() { restore(from: \.redoStack, to: \.undoStack) }

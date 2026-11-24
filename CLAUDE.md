@@ -37,7 +37,7 @@ Glass doesn't render in these captures (sidebar and glass HUDs come out white); 
   UserDefaults) that a sync tool shares with the phone (Google Drive + DriveSync); jobs are copied in (`adopt`, later
   `updated` wins), never merged. `list()` hides a job until its PDF arrives and turns a sync tool's same-id copy into a
   "(conflict)" job; `save(_:seen:)` refuses to overwrite a version another device saved or recreate a job it deleted (then `JobModel` saves its own
-  as a conflict job and shows the other). The app re-reads on activation (`AppState.refresh`). No folder watching.
+  as a conflict job and shows the other). The app re-reads on activation and when the sync folder's entries change (`AppState.watch`, a directory event source, debounced 1 s; an in-place file rewrite doesn't fire).
 - `PDFPages.swift`: `PlanPDF` actor (PDFKit isn't thread-safe: the Android `pdfThread`). Renders at the same scale as
   Android (≤4096 px, ≤4x) so stored run pixels mean the same thing. Text boxes come from `page.selection(for:)` bounds
   through `page.transform(for: .cropBox)`, flipped to top-left points; works on rotated pages. OCR is Vision

@@ -51,6 +51,7 @@ final class AppState {
         }
         syncFolder = folder
         store = JobStore(dir: folder)
+        watch(folder)
         if failed { error = "Couldn't open the sync folder, so these are the jobs saved on this Mac. Choose it again in File > Sync Folder…" }
         jobs = store.list()
         let last = UserDefaults.standard.string(forKey: "openJob")
@@ -73,8 +74,15 @@ final class AppState {
 
     /** Picks up what another device synced: the list, and the open job if it changed (or closes it if it was deleted). */
     func refresh() {
+        // One at a time: list() resolves sync copies (two at once would make two conflict jobs), and an older list could land last.
+        guard !refreshing else { refreshAgain = true; return }
+        refreshing = true
         let store = store
         Task {
+            defer {
+                refreshing = false
+                if refreshAgain { refreshAgain = false; refresh() }
+            }
             // Off the main thread: in a cloud folder, reading an online-only file waits for its download.
             let list = await Task.detached { store.list() }.value
             guard store.dir == self.store.dir else { return } // switched folders meanwhile
@@ -82,7 +90,41 @@ final class AppState {
             guard let m = model else { return }
             replace(m.job) // the list may predate an edit made while it was read
             // Read now, not with the list: an older read would look like another device's version.
-            if let disk = store.load(m.job.id) { m.reloadIfChanged(disk) } else if !store.exists(m.job.id) { selection = nil }
+            if let disk = store.load(m.job.id) {
+                if m.isNewer(disk) { if m.busy { scheduleRefresh() } else { m.reloadIfChanged(disk) } } // reload once the gesture ends
+            } else if !store.exists(m.job.id) { selection = nil }
+        }
+    }
+
+    @ObservationIgnored private var watcher: DispatchSourceFileSystemObject?
+    @ObservationIgnored private var pendingRefresh: Task<Void, Never>?
+    @ObservationIgnored private var refreshing = false
+    @ObservationIgnored private var refreshAgain = false
+
+    /**
+     * Refreshes when the sync folder's entries change (a sync tool bringing a file in, atomic saves). Only the sync
+     * folder: nothing else writes the local one. shortcut: an in-place rewrite of a file doesn't fire (activation still
+     * catches it); switch to FSEvents with file events if a sync tool writes in place.
+     */
+    private func watch(_ folder: URL?) {
+        watcher?.cancel()
+        watcher = nil
+        guard let folder else { return }
+        let fd = Darwin.open(folder.path, O_EVTONLY)
+        guard fd >= 0 else { return } // activation still refreshes
+        let s = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .delete, .rename], queue: .main)
+        s.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.scheduleRefresh() } }
+        s.setCancelHandler { close(fd) }
+        s.resume()
+        watcher = s
+    }
+
+    /** Coalesces a burst of events (a sync, our own saves) into one refresh. */
+    private func scheduleRefresh() {
+        pendingRefresh?.cancel()
+        pendingRefresh = Task {
+            try? await Task.sleep(for: .seconds(1))
+            if !Task.isCancelled { refresh() }
         }
     }
 
@@ -123,6 +165,7 @@ final class AppState {
         syncFolder?.stopAccessingSecurityScopedResource()
         syncFolder = folder
         store = new
+        watch(folder)
         jobs = store.list()
         if jobs.contains(where: { $0.id == selection }) { open(selection) } else { selection = nil }
     }
@@ -155,6 +198,7 @@ final class AppState {
         let n = name.trimmed
         guard !n.isEmpty, var j = store.load(job.id) else { return }
         j.name = n
+        j.updated = Int64(Date().timeIntervalSince1970 * 1000) // so the other device's save check and adopt see it
         try? store.save(j)
         replace(j)
     }
