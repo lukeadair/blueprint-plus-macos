@@ -5,6 +5,8 @@
 <p align="center"><strong>Cabinet takeoffs from a PDF plan.</strong><br />
 Set the scale, click along each run, and get linear footage by room.</p>
 
+<p align="center"><img src="docs/images/screenshot.png" alt="Blueprint+ with a floor plan open: runs measured in red, rooms tinted, totals by room in the inspector" /></p>
+
 The native macOS version of [Blueprint+](https://github.com/lukeadair/blueprint-plus), with the same features and job
 files as the Android app, built for the mouse, trackpad and keyboard.
 
